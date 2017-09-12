@@ -882,7 +882,7 @@ private:
 
   LA::MPI::BlockSparseMatrix system_pde_matrix;
   LA::MPI::BlockVector solution, newton_update,
-  old_solution, old_old_solution, system_pde_residual;
+  old_solution, old_old_solution, system_pde_residual, old_solution_dot;
   LA::MPI::BlockVector system_total_residual;
 
   LA::MPI::BlockVector diag_mass, diag_mass_relevant;
@@ -948,7 +948,7 @@ private:
 
   FunctionParser<1> func_pressure;
   double constant_k, alpha_eps,
-         G_c, viscosity_biot, gamma_penal;
+         G_c, viscosity_biot, gamma_penal, G_r;
 
   double E_modulus, E_prime;
   double min_cell_diameter, norm_part_iterations, value_phase_field_for_refinement;
@@ -1030,6 +1030,8 @@ FracturePhaseFieldProblem<dim>::declare_parameters (ParameterHandler &prm)
 
   prm.enter_subsection("Problem dependent parameters");
   {
+    prm.declare_entry("Fracture growth viscosity G_r", "1.0", Patterns::Double());
+
     prm.declare_entry("K reg", "1.0 * h", Patterns::Anything());
 
     prm.declare_entry("Eps reg", "1.0 * h", Patterns::Anything());
@@ -1172,6 +1174,7 @@ FracturePhaseFieldProblem<dim>::set_runtime_parameters ()
                             FunctionParser<1>::ConstMap());
 
   G_c = prm.get_double("Fracture toughness G_c");
+  G_r = prm.get_double("Fracture growth viscosity G_r");
   density_structure = prm.get_double("Density solid");
 
   // In all examples chosen as 0. Will be non-zero
@@ -1394,6 +1397,9 @@ FracturePhaseFieldProblem<dim>::setup_system ()
 
   // Old timestep solution at time step n-2
   old_old_solution.reinit(partition_relevant);
+
+  // Old timestep solution at time step n-2
+  old_solution_dot.reinit(partition_relevant);
 
   // Updates for Newton's method
   newton_update.reinit(partition);
@@ -1889,6 +1895,10 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
     partition_relevant);
   rel_old_old_solution = old_old_solution;
 
+  LA::MPI::BlockVector rel_old_solution_dot(
+    partition_relevant);
+  rel_old_solution_dot = old_solution_dot;
+
   QGauss<dim> quadrature_formula(degree + 2);
 
   FEValues<dim> fe_values(fe, quadrature_formula,
@@ -1909,6 +1919,9 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
 
   std::vector<Vector<double> > old_solution_values(n_q_points,
                                                    Vector<double>(dim+1));
+
+  std::vector<Vector<double> > old_timestep_solution_dot_values(n_q_points,
+                                                                Vector<double>(dim+1));
 
   std::vector<std::vector<Tensor<1,dim> > > old_solution_grads (n_q_points,
       std::vector<Tensor<1,dim> > (dim+1));
@@ -1961,6 +1974,7 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
 
         // Old_timestep_solution values
         fe_values.get_function_values (rel_old_solution, old_timestep_solution_values);
+        fe_values.get_function_values (rel_old_solution_dot, old_timestep_solution_dot_values);
 
         // Old Old_timestep_solution values
         fe_values.get_function_values (rel_old_old_solution, old_old_timestep_solution_values);
@@ -1974,7 +1988,6 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
                   phi_i_grads_u[k] = fe_values[displacements].gradient(k, q);
                   phi_i_pf[k]       = fe_values[phase_field].value (k, q);
                   phi_i_grads_pf[k] = fe_values[phase_field].gradient (k, q);
-
                 }
 
               // First, we prepare things coming from the previous Newton
@@ -2091,7 +2104,9 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
                           {
                             // Solid
                             local_matrix(j,i) += 1.0 *
-                                                 (scalar_product(((1-constant_k) * pf_extra * pf_extra + constant_k) *
+                                                 (// Mass matrix (wave equation term).
+                                                  density_structure*phi_i_u[i]*phi_i_u[j]/(timestep*timestep) +  // FROM MAICOL + LUCA
+                                                  scalar_product(((1-constant_k) * pf_extra * pf_extra + constant_k) *
                                                                  stress_term_plus_LinU, phi_i_grads_u[j])
                                                   // stress term minus
                                                   + decompose_stress_matrix * scalar_product(stress_term_minus_LinU, phi_i_grads_u[j])
@@ -2115,6 +2130,8 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
                                - 2.0 * (alpha_biot - 1.0) * current_pressure *
                                (pf * (phi_i_grads_u[i][0][0] + phi_i_grads_u[i][1][1])
                                 + phi_i_pf[i] * divergence_u) * phi_i_pf[j]
+                                // FROM MAICOL + LUCA
+                                + G_r*phi_i_pf[i]*phi_i_pf[j]/timestep
                               ) * fe_values.JxW(q);
                           }
 
@@ -2132,6 +2149,7 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
                     {
                       const Tensor<2, dim> phi_i_grads_u =
                         fe_values[displacements].gradient(i, q);
+                      const Tensor<1, dim> phi_i_u = fe_values[displacements].value(i,q);
 
                       // Solid
                       local_rhs(i) -=
@@ -2140,6 +2158,9 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
                          +  decompose_stress_rhs * scalar_product(stress_term_minus, phi_i_grads_u)
                          // Pressure terms
                          - (alpha_biot - 1.0) * current_pressure * pf_extra * pf_extra * (phi_i_grads_u[0][0] + phi_i_grads_u[1][1])
+                         // Dynamic terms MAICOL+LUCA
+                         + density_structure*phi_i_u[comp_i]*((old_solution_values[q][comp_i]-old_timestep_solution_values[q][comp_i])/(timestep*timestep)
+                                                              - old_timestep_solution_dot_values[q][comp_i]/timestep)
                         ) * fe_values.JxW(q);
 
                     }
@@ -2159,12 +2180,12 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
                          + G_c * alpha_eps * grad_pf * phi_i_grads_pf
                          // Pressure terms
                          - 2.0 * (alpha_biot - 1.0) * current_pressure * pf * divergence_u * phi_i_pf
+                         // Dynamic terms MAICOL+LUCA
+                         + G_r*(pf-old_timestep_solution_values[q][comp_i])/timestep*phi_i_pf
                         ) * fe_values.JxW(q);
                     }
 
                 } // end i
-
-
 
               // end n_q_points
             }
@@ -3086,13 +3107,13 @@ FracturePhaseFieldProblem<dim>::output_results () const
       std::string visit_master_filename = ("output/" + filename_basis
                                            + Utilities::int_to_string(refinement_cycle, 5) + ".visit");
       std::ofstream visit_master(visit_master_filename.c_str());
-      data_out.write_visit_record(visit_master, filenames);
+      DataOutBase::write_visit_record(visit_master, filenames);
 
       static std::vector<std::vector<std::string> > output_file_names_by_timestep;
       output_file_names_by_timestep.push_back(filenames);
       std::ofstream global_visit_master("output/solution.visit");
-      data_out.write_visit_record(global_visit_master,
-                                  output_file_names_by_timestep);
+      DataOutBase::write_visit_record(global_visit_master,
+                                      output_file_names_by_timestep);
     }
 }
 
@@ -4027,7 +4048,6 @@ FracturePhaseFieldProblem<dim>::run ()
 
         double newton_reduction = 1.0;
 
-
         if (timestep_number > switch_timestep && switch_timestep>0)
           timestep = timestep_size_2;
 
@@ -4038,6 +4058,11 @@ FracturePhaseFieldProblem<dim>::run ()
         // Compute next time step
         old_old_solution = old_solution;
         old_solution = solution;
+
+        // Compute previous solution_dot
+        old_solution_dot = old_solution;
+        old_solution_dot -= old_old_solution;
+        old_solution_dot /= old_timestep;
 
 redo_step:
         pcout << std::endl;
@@ -4313,8 +4338,7 @@ main (
       FracturePhaseFieldProblem<2>::declare_parameters(prm);
       if (argc>1)
         {
-          if (!prm.read_input(argv[1], true))
-            AssertThrow(false, ExcMessage("could not read .prm!"));
+          prm.parse_input(argv[1]);
         }
       else
         {
