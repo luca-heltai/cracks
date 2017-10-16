@@ -1,44 +1,123 @@
+##-----------------------------------------------------------
 ##
-#  CMake script for the step-1 tutorial program:
+##    Copyright (C) 2015 by the deal2lkit authors
+##
+##    This file is part of the deal2lkit library.
+##
+##    The deal2lkit library is free software; you can use it, redistribute
+##    it, and/or modify it under the terms of the GNU Lesser General
+##    Public License as published by the Free Software Foundation; either
+##    version 2.1 of the License, or (at your option) any later version.
+##    The full text of the license can be found in the file LICENSE at
+##    the top level of the deal2lkit distribution.
+##
+##-----------------------------------------------------------
+
+##
+# CMake script for large project, with one executable
+# and a library of objects depending on deal2lkit.
+#
+# The structure of the directory is assumed to be: 
+# ./source: containing implementations and one file with "int main()"
+# ./include: containing all class declarations
+# ./tests: containing pairs of files: test.cc/test.output to test
 ##
 
-# Set the name of the project and target:
-SET(TARGET "cracks")
+# Set the name of the project and target
+# If your application follows the structure above, you don't need to 
+# specify anything else. 
+SET(TARGET cracks)
+SET(_main source/main.cc)
 
+# Set the _main variable to empty if you don't want an executable
+# but only a library
+#SET(_main "")
+
+############################################################
+# Normally you shouldn't need to change anything below.
+############################################################
 # Declare all source files the target consists of:
-SET(TARGET_SRC
-  ${TARGET}.cc
-  # You can specify additional files here!
-  )
+file(GLOB _files source/*cc source/*cpp include/*.h include/*.hpp)
 
-# Usually, you will not need to modify anything beyond this point...
+# Don't compile the main file into the library
+IF(NOT "${_main}" STREQUAL "") 
+  LIST(REMOVE_ITEM _files
+    ${CMAKE_CURRENT_SOURCE_DIR}/${_main}
+    )
+ENDIF()
+
+INCLUDE_DIRECTORIES(include)
 
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8.8)
 
-FIND_PACKAGE(deal.II 8.2.1 QUIET
+SET(CMAKE_MACOSX_RPATH 1)
+
+FIND_PACKAGE(deal.II 8.5 REQUIRED
   HINTS ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
   )
-IF(NOT ${deal.II_FOUND})
-  MESSAGE(FATAL_ERROR "\n"
-    "*** Could not locate deal.II. ***\n\n"
-    "You may want to either pass a flag -DDEAL_II_DIR=/path/to/deal.II to cmake\n"
-    "or set an environment variable \"DEAL_II_DIR\" that contains this path."
-    )
-ENDIF()
-
-IF( NOT DEAL_II_WITH_MPI OR
-    NOT DEAL_II_WITH_P4EST OR
-    NOT DEAL_II_WITH_TRILINOS )
-  MESSAGE(FATAL_ERROR "
-Error! The deal.II library found at ${DEAL_II_PATH} was not configured with
-    DEAL_II_WITH_MPI = ON
-    DEAL_II_WITH_P4EST = ON
-    DEAL_II_WITH_TRILINOS = ON
-One or all of these are OFF in your installation but are required for this program."
-    )
-ENDIF()
-
-
 DEAL_II_INITIALIZE_CACHED_VARIABLES()
+
+
 PROJECT(${TARGET})
-DEAL_II_INVOKE_AUTOPILOT()
+DEAL_II_INITIALIZE_CACHED_VARIABLES()
+OPTION(ENABLE_APP_TESTING "Enable tests in this application." ON)
+
+# We add one library and one target for each type of deal.II library
+# we found. If you compiled deal.II with both Release and Debug
+# mode, this will generate both Release and Debug programs for you.
+# The debug library and program are postfixed with ".g"
+SET(_d2_build_types "Release;Debug")
+SET(Release_postfix "")
+SET(Debug_postfix ".g")
+
+FOREACH(_build_type ${_d2_build_types})
+  # Postfix to use everywhere
+  SET(_p "${${_build_type}_postfix}")
+  # Only build this type, if deal.II was compiled with it.
+  IF(CMAKE_BUILD_TYPE MATCHES "${_build_type}" AND
+      DEAL_II_BUILD_TYPE MATCHES "${_build_type}")
+
+    MESSAGE("-- Found ${_build_type} version of deal.II.")
+
+    SET(_lib "${TARGET}-lib${_p}")
+    MESSAGE("-- Configuring library ${_lib}")
+
+    STRING(TOUPPER "${_build_type}" _BUILD_TYPE)
+
+    ADD_LIBRARY(${_lib} SHARED ${_files})
+    FOREACH(_dim 2 3)
+	SET(_exe "${TARGET}_${_dim}d${${_build_type}_postfix}")
+	MESSAGE("-- Configuring executable ${_exe}")
+	ADD_EXECUTABLE(${_exe} ${_main})
+	TARGET_COMPILE_DEFINITIONS(${_exe} PUBLIC DIMENSION=${_dim})
+	TARGET_LINK_LIBRARIES(${_exe} ${_lib})
+	DEAL_II_SETUP_TARGET(${_exe} ${_BUILD_TYPE})
+    ENDFOREACH()
+
+    SET(TEST_LIBRARIES_${_BUILD_TYPE} ${_lib})
+
+    DEAL_II_SETUP_TARGET(${_lib} ${_BUILD_TYPE})
+  ENDIF()
+ENDFOREACH()
+
+
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests AND ${ENABLE_APP_TESTING})
+  ADD_SUBDIRECTORY(tests)
+  ENABLE_TESTING()
+endif()
+
+
+# Doxygen
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in)
+    find_package(Doxygen)
+    if(DOXYGEN_FOUND)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile @ONLY)
+    add_custom_target(doc
+    ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Generating API documentation with Doxygen" VERBATIM
+    )
+    endif(DOXYGEN_FOUND)
+endif()
+
+add_custom_target(indent ./scripts/indent WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
