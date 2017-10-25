@@ -492,7 +492,7 @@ FracturePhaseFieldProblem<dim>::parse_parameters (ParameterHandler &prm)
   poisson_ratio_nu = prm.get_double("Poisson ratio nu");
   E_modulus = prm.get_double("E modulus");
 
-  if(poisson_ratio_nu != 0.0 && E_modulus != 0.0) {
+  if((poisson_ratio_nu != 0.0) && (E_modulus != 0.0)) {
       lame_coefficient_mu = E_modulus / (2.0 * (1 + poisson_ratio_nu));
 
       lame_coefficient_lambda = (2 * poisson_ratio_nu * lame_coefficient_mu)
@@ -503,9 +503,10 @@ FracturePhaseFieldProblem<dim>::parse_parameters (ParameterHandler &prm)
       lame_coefficient_mu = prm.get_double("Lame mu");
       lame_coefficient_lambda = prm.get_double("Lame lambda");
 
-      // Dummy
-      poisson_ratio_nu = prm.get_double("Poisson ratio nu");
-      E_modulus = prm.get_double("E modulus");
+      // Get the right values
+      poisson_ratio_nu = lame_coefficient_lambda/(2*(lame_coefficient_lambda+lame_coefficient_mu));
+      E_modulus = lame_coefficient_mu*(3*lame_coefficient_lambda+2*lame_coefficient_mu)/
+          (lame_coefficient_lambda+lame_coefficient_mu);
     }
 
   prm.leave_subsection();
