@@ -258,6 +258,7 @@ private:
   bool use_old_timestep_pf;
 
   double min_time_step_size = 1e-6;
+  double elastic_viscosity = 0;
 };
 
 // The constructor of this class is comparable
@@ -352,6 +353,7 @@ FracturePhaseFieldProblem<dim>::declare_parameters (ParameterHandler &prm)
 
     prm.declare_entry("Lame lambda", "0.0", Patterns::Double(0));
 
+    prm.add_parameter("Elastic viscosity", elastic_viscosity);
   }
   prm.leave_subsection();
 
@@ -1301,11 +1303,13 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
         fe_values.get_function_gradients (rel_solution, old_solution_grads);
 
         // Old_timestep_solution values
-        fe_values.get_function_values (rel_old_solution, old_timestep_solution_values);
-        fe_values.get_function_values (rel_old_solution_dot, old_timestep_solution_dot_values);
+        fe_values.get_function_values    (rel_old_solution, old_timestep_solution_values);
+        fe_values.get_function_gradients (rel_old_solution, old_timestep_solution_grads);
+        fe_values.get_function_values    (rel_old_solution_dot, old_timestep_solution_dot_values);
 
         // Old Old_timestep_solution values
         fe_values.get_function_values (rel_old_old_solution, old_old_timestep_solution_values);
+
 
         {
           for (unsigned int q = 0; q < n_q_points; ++q)
@@ -1355,8 +1359,12 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
               const Tensor<2,dim> grad_u = Tensors
                                            ::get_grad_u<dim> (q, old_solution_grads);
 
+              const Tensor<2,dim> previous_grad_u = Tensors
+                                                    ::get_grad_u<dim> (q, old_timestep_solution_grads);
+
               const Tensor<1,dim> grad_pf = Tensors
                                             ::get_grad_pf<dim> (q, old_solution_grads);
+
 
               const double divergence_u = old_solution_grads[q][0][0] +
                                           old_solution_grads[q][1][1];
@@ -1365,7 +1373,17 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
                                              ::get_Identity<dim> ();
 
               const Tensor<2,dim> E = 0.5 * (grad_u + transpose(grad_u));
+              const Tensor<2,dim> previous_E = 0.5 * (previous_grad_u + transpose(previous_grad_u));
               const double tr_E = trace(E);
+              const double previous_tr_E = trace(previous_E);
+
+              Tensor<2,dim> current_stress_term =
+                  lame_coefficient_lambda * tr_E * Identity
+                  + 2 * lame_coefficient_mu * E;
+
+              Tensor<2,dim> previous_stress_term =
+                  lame_coefficient_lambda * previous_tr_E * Identity
+                  + 2 * lame_coefficient_mu * previous_E;
 
               Tensor<2,dim> stress_term_plus;
               Tensor<2,dim> stress_term_minus;
@@ -1434,6 +1452,11 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
                             local_matrix(j,i) += 1.0 *
                                                  (// Mass matrix (wave equation term).
                                                   density_structure*phi_i_u[i]*phi_i_u[j]/(timestep*timestep) +  // FROM MAICOL + LUCA
+                                                  // Larsen viscosity
+                                                  elastic_viscosity/timestep*
+                                                  scalar_product(((1-constant_k) * pf_extra * pf_extra + constant_k) *
+                                                                 stress_term_LinU, phi_i_grads_u[j])+
+                                                  // stress term plus
                                                   scalar_product(((1-constant_k) * pf_extra * pf_extra + constant_k) *
                                                                  stress_term_plus_LinU, phi_i_grads_u[j])
                                                   // stress term minus
@@ -1482,7 +1505,11 @@ FracturePhaseFieldProblem<dim>::assemble_system (bool residual_only)
                       // Solid
                       local_rhs(i) -=
                         (scalar_product(((1.0-constant_k) * pf_extra * pf_extra + constant_k) *
-                                        stress_term_plus, phi_i_grads_u)
+                                        stress_term_plus, phi_i_grads_u)+
+                         // Larsen viscosity
+                         elastic_viscosity/timestep*
+                         scalar_product(((1.0-constant_k) * pf_extra * pf_extra + constant_k) *
+                                        current_stress_term-previous_stress_term, phi_i_grads_u) +
                          +  decompose_stress_rhs * scalar_product(stress_term_minus, phi_i_grads_u)
                          // Pressure terms
                          - (alpha_biot - 1.0) * current_pressure * pf_extra * pf_extra * (phi_i_grads_u[0][0] + phi_i_grads_u[1][1])
