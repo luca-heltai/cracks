@@ -257,7 +257,7 @@ private:
   double old_timestep, old_old_timestep;
   bool use_old_timestep_pf;
 
-
+  double min_time_step_size = 1e-6;
 };
 
 // The constructor of this class is comparable
@@ -308,6 +308,8 @@ FracturePhaseFieldProblem<dim>::declare_parameters (ParameterHandler &prm)
     prm.declare_entry("Timestep size", "1.0", Patterns::Double(0));
 
     prm.declare_entry("Timestep size to switch to", "1.0", Patterns::Double(0));
+
+    prm.add_parameter("Minimum time step size", min_time_step_size);
 
     prm.declare_entry("Switch timestep after steps", "0", Patterns::Integer(0));
 
@@ -2972,7 +2974,13 @@ redo_step:
                   }
                 catch (SolverControl::NoConvergence e)
                   {
-                    pcout << "Solver did not converge! Adjusting time step to " << timestep/10 << std::endl;
+                    if(timestep/2 > min_time_step_size)
+                      pcout << "Solver did not converge! Adjusting time step to " << timestep/2 << std::endl;
+                    else
+                      {
+                        pcout << "Solver did not converge, and time step is too small. Aborting." << std::endl;
+                        throw;
+                      }
                   }
 
                 pcout << "Taking old_timestep_pf" << std::endl;
