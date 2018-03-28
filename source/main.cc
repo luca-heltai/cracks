@@ -33,6 +33,8 @@
 #include <deal.II/grid/tria_boundary_lib.h>
 #include <deal.II/grid/grid_tools.h>
 #include <deal.II/grid/grid_in.h>
+#include <deal.II/grid/grid_out.h>
+#include <deal.II/grid/manifold_lib.h>
 
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/dofs/dof_renumbering.h>
@@ -534,6 +536,17 @@ FracturePhaseFieldProblem<dim>::parse_parameters (ParameterHandler &prm)
   Assert(dim==2, ExcInternalError());
   grid_in.read(input_file, format);
 
+  if(triangulation.n_vertices()==39){
+      // Specific case for negri test case.
+      GridTools::copy_boundary_to_manifold_id(triangulation);
+
+      static const SphericalManifold<dim> manifold1(Point<dim>(.2,.75));
+      static const SphericalManifold<dim> manifold2(Point<dim>(.2,.25));
+
+      triangulation.set_manifold(1, manifold1);
+      triangulation.set_manifold(2, manifold2);
+    }
+
   triangulation.refine_global(n_global_pre_refine);
 
   pcout << "Cells:\t" << triangulation.n_active_cells() << std::endl;
@@ -872,6 +885,85 @@ TEST_CASE("eigenvalues for matrix with (1,1)=0")
   REQUIRE(eval2 == Approx(0.0));
   REQUIRE(evec2[0] == Approx(0.0));
   REQUIRE(evec2[1] == Approx(1.0));
+}
+
+TEST_CASE("building the two dimensional grid")
+{
+  Triangulation<2> tria0, tria1, tria2, tria3, tria;
+  GridGenerator::hyper_cube_with_cylindrical_hole(tria0, .1, .25, 0, 1, true);
+  GridGenerator::hyper_cube_with_cylindrical_hole(tria1, .1, .25, 0, 1, true);
+
+  auto shift0 = [](Point<2>p){
+    auto p1(p);
+    p1[0] -= .25;
+    p1[1] += .25;
+    return p1;
+  };
+
+  auto shift1 = [](Point<2>p){
+    auto p1(p);
+    p1[0] -= .25;
+    p1[1] -= .25;
+    return p1;
+  };
+
+  GridTools::transform(shift0,tria0);
+  GridTools::transform(shift1,tria1);
+  GridGenerator::subdivided_hyper_rectangle(tria2,{2,4},Point<2>(0,-.5), Point<2>(0.5,.5), true);
+  GridGenerator::merge_triangulations(tria0, tria1, tria3);
+  GridGenerator::merge_triangulations(tria3,tria2, tria);
+
+  REQUIRE(tria.n_vertices()==39);
+  {
+    auto shift2 = [](Point<2>p){
+      if(p[0] > -0.499 && p[0]<-0.01) {
+          auto p1(p);
+          p1[0] -= .05;
+          return p1;
+        }
+      return p;
+    };
+
+    GridTools::transform(shift2,tria);
+  }
+  {
+    auto shift2 = [](Point<2>p){
+      auto p1(p);
+      p1[0] += .5;
+      p1[1] += .5;
+      return p1;
+    };
+
+    GridTools::transform(shift2,tria);
+  }
+  for(auto cell : tria.active_cell_iterators())
+    {
+      if(cell->at_boundary())
+        for(unsigned int f=0; f<GeometryInfo<2>::faces_per_cell; ++f)
+          if(cell->face(f)->at_boundary())
+            {
+              auto p = cell->face(f)->center();
+              if(p.distance(Point<2>(.2,.75)) < .15) {
+                  cell->face(f)->set_boundary_id(1);
+                  cell->face(f)->set_manifold_id(1);
+                }
+              else if(p.distance(Point<2>(.2,.25)) < .15) {
+                  cell->face(f)->set_boundary_id(2);
+                  cell->face(f)->set_manifold_id(2);
+                }
+            }
+    }
+  {
+    std::ofstream out("test.vtk");
+    GridOut go;
+    go.write_vtk(tria, out);
+  }
+  {
+    std::ofstream out("negri.inp");
+    GridOut go;
+    go.set_flags(GridOutFlags::Ucd(true,true,true));
+    go.write_ucd(tria, out);
+  }
 }
 
 TEST_CASE("eigenvalues for matrix with (1,1)=0 test2")
@@ -2257,21 +2349,18 @@ FracturePhaseFieldProblem<dim>::output_results () const
           filename_basis + Utilities::int_to_string(refinement_cycle, 5)
           + "." + Utilities::int_to_string(i, 4) + ".vtu");
 
-      std::ofstream master_output(
-        ("output/" + filename_basis + Utilities::int_to_string(refinement_cycle, 5)
-         + ".pvtu").c_str());
+      std::string master_output_name = ("output/" + filename_basis + Utilities::int_to_string(refinement_cycle, 5)
+                                        + ".pvtu");
+      std::ofstream master_output(master_output_name.c_str());
       data_out.write_pvtu_record(master_output, filenames);
 
-      std::string visit_master_filename = ("output/" + filename_basis
-                                           + Utilities::int_to_string(refinement_cycle, 5) + ".visit");
-      std::ofstream visit_master(visit_master_filename.c_str());
-      DataOutBase::write_visit_record(visit_master, filenames);
+      static std::vector<std::pair<double,std::string> > times_and_names;
 
-      static std::vector<std::vector<std::string> > output_file_names_by_timestep;
-      output_file_names_by_timestep.push_back(filenames);
-      std::ofstream global_visit_master("output/solution.visit");
-      DataOutBase::write_visit_record(global_visit_master,
-                                      output_file_names_by_timestep);
+      times_and_names.push_back(std::make_pair(time, master_output_name));
+
+      std::ofstream global_pvd_master("solution.pvd");
+      DataOutBase::write_pvd_record(global_pvd_master,
+                                    times_and_names);
     }
 }
 
