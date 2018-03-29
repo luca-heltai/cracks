@@ -2,7 +2,7 @@
 # DEAL_II_PACKAGE_VERSION = 9.0.0-pre
 subsection Dirichlet boundary conditions
   set Function constants           = 
-  set Function expression          = 0; y>0 ? t : -t; 0
+  set Function expression          = 0; y>.5 ? t : -t; 0
   set Homogeneous boundary ids     = 
   set Non homogeneous boundary ids = 1,2
   set Variable names               = x,y,t
@@ -19,7 +19,7 @@ subsection Forcing terms
 end
 subsection Global parameters
   set Adaptive refinement cycles       = 0
-  set Global pre-refinement steps      = 9
+  set Global pre-refinement steps      = 3
   set Grid file name                   = negri.inp
   set Local pre-refinement steps       = 3
   set Max No of timesteps              = 10000
@@ -30,7 +30,7 @@ subsection Global parameters
   set Timestep size to switch to       = 1e-3
   set outer solver                     = active set
   set ref strategy                     = phase field
-  set value phase field for refinement = 0.9
+  set value phase field for refinement = 0.6
 end
 subsection Initial conditions
   set Function constants  = eps=1e-5
@@ -49,7 +49,7 @@ subsection Problem dependent parameters
   set Density solid                 = 0
   set E modulus                     = 0
   set Elastic viscosity             = 0
-  set Eps reg                       = 5e-3
+  set Eps reg                       = 5*h
   set Fracture growth viscosity G_r = 1e-3
   set Fracture toughness G_c        = 1
   set Gamma penalization            = 0.0
@@ -60,13 +60,14 @@ subsection Problem dependent parameters
   set Pressure                      = 0
   set alpha time                    = 0.0
 end
+
 subsection Solver parameters
   set Decompose stress in matrix = 0.0
   set Decompose stress in rhs    = 0.0
-  set Line search damping        = 0.5
-  set Line search maximum steps  = 5
-  set Newton lower bound         = 1e-5
-  set Newton maximum steps       = 10
-  set Upper Newton rho           = 0.999
-  set Use Direct Inner Solver    = false
+  set Use Direct Inner Solver              = false
+  set Newton lower bound     		   = 1.0e-6
+  set Newton maximum steps		   = 50
+  set Upper Newton rho			   = 0.999
+  set Line search maximum steps		   = 10
+  set Line search damping 		   = 0.6
 end
